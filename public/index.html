@@ -1,43 +1,541 @@
 <!DOCTYPE html>
-<html lang="en">
-  <head>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>個人財務與現金流管理系統 (雲端版)</title>
+    
+    <!-- 載入 Tailwind CSS (排版) -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <meta charset="utf-8" />
-    <meta
-      name="viewport"
-      content="width=device-width, initial-scale=1, shrink-to-fit=no"
-    />
-    <meta name="theme-color" content="#000000" />
-    <!--
-      manifest.json provides metadata used when your web app is added to the
-      homescreen on Android. See https://developers.google.com/web/fundamentals/engage-and-retain/web-app-manifest/
-    -->
-    <link rel="manifest" href="%PUBLIC_URL%/manifest.json" />
-    <link rel="shortcut icon" href="%PUBLIC_URL%/favicon.ico" />
-    <!--
-      Notice the use of %PUBLIC_URL% in the tags above.
-      It will be replaced with the URL of the `public` folder during the build.
-      Only files inside the `public` folder can be referenced from the HTML.
+    
+    <!-- 載入 React 核心 -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- 載入穩定版圖表套件 -->
+    <script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+    <script src="https://unpkg.com/recharts@2.1.9/umd/Recharts.js"></script>
 
-      Unlike "/favicon.ico" or "favicon.ico", "%PUBLIC_URL%/favicon.ico" will
-      work correctly both with client-side routing and a non-root public URL.
-      Learn how to configure a non-root public URL by running `npm run build`.
-    -->
-    <title>React App</title>
-  </head>
+    <!-- 載入 Firebase 模組並掛載到 window，讓 React 可以使用 -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-  <body>
-    <noscript> You need to enable JavaScript to run this app. </noscript>
-    <div id="root"></div>
-    <!--
-      This HTML file is a template.
-      If you open it directly in the browser, you will see an empty page.
+        // 您的專屬 Firebase 金鑰
+        const firebaseConfig = {
+            apiKey: "AIzaSyC9XWi8hb0RVny1iHDiClurHZ2KaLU4LLg",
+            authDomain: "mycashflowapp-340b2.firebaseapp.com",
+            projectId: "mycashflowapp-340b2",
+            storageBucket: "mycashflowapp-340b2.firebasestorage.app",
+            messagingSenderId: "796551841252",
+            appId: "1:796551841252:web:1957a38de68687ef0933f1"
+        };
 
-      You can add webfonts, meta tags, or analytics to this file.
-      The build step will place the bundled scripts into the <body> tag.
+        const app = initializeApp(firebaseConfig);
+        
+        // 將需要的功能暴露給全域環境
+        window.firebaseAPI = {
+            auth: getAuth(app),
+            db: getFirestore(app),
+            signInAnonymously,
+            onAuthStateChanged,
+            doc, setDoc, getDoc, collection, onSnapshot
+        };
 
-      To begin the development, run `npm start` or `yarn start`.
-      To create a production bundle, use `npm run build` or `yarn build`.
-    -->
-  </body>
+        // 發送載入完成事件，通知 React 可以啟動了
+        window.dispatchEvent(new Event('firebaseLoaded'));
+    </script>
+</head>
+<body class="bg-slate-50 text-slate-800 font-sans">
+    
+    <div id="root">
+        <div class="flex items-center justify-center min-h-screen text-slate-500 flex-col gap-4">
+            <svg class="animate-spin h-8 w-8 text-indigo-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+            <p>正在連線至雲端資料庫...</p>
+        </div>
+    </div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+        const { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } = window.Recharts;
+        const appId = 'mycashflowapp';
+
+        // 封裝小元件
+        const SummaryCard = ({ title, amount, color, format, isNet }) => (
+            <div className={`bg-white rounded-2xl p-5 shadow-sm border border-slate-100 flex flex-col justify-center ${isNet ? 'md:col-span-2 xl:col-span-2' : ''}`}>
+                <h3 className="text-sm font-medium text-slate-500 mb-1">{title}</h3>
+                <div className={`text-3xl font-bold tracking-tight ${color} truncate`}>
+                    {format(amount)}
+                </div>
+            </div>
+        );
+
+        const InputGroup = ({ label, value, onChange, color }) => (
+            <div className="flex flex-col">
+                <label className="text-[10px] font-medium text-slate-500 mb-1">{label}</label>
+                <div className="relative">
+                    <input type="number" min="0" value={value} onChange={onChange}
+                        className={`w-full px-2 py-1.5 text-sm font-semibold bg-white border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-${color}-500`} />
+                </div>
+            </div>
+        );
+
+        const InputSmall = ({ label, value, onChange }) => (
+            <div className="flex flex-col">
+                <label className="text-[10px] text-slate-500">{label}</label>
+                <input type="number" value={value} onChange={onChange} className="px-2 py-1 text-xs bg-white border border-slate-200 rounded text-center focus:outline-none focus:border-indigo-400" />
+            </div>
+        );
+
+        function CashflowApp() {
+            const [user, setUser] = useState(null);
+            const [cloudStatus, setCloudStatus] = useState('連線中...');
+            
+            const [age, setAge] = useState(30);
+            const [mortgage1Calc, setMortgage1Calc] = useState({ principal: 1000, years: 30, rate: 2.15 }); 
+            const [mortgage2Calc, setMortgage2Calc] = useState({ principal: 0, years: 20, rate: 2.50 }); 
+            const [creditCalc, setCreditCalc] = useState({ principal: 100, years: 7, rate: 3.5 });   
+            
+            const [assets, setAssets] = useState({
+                cash: 30, stocksRegular: 100, stocksLeveraged: 0, funds: 0, futures: 0,
+                houseValue: 1500, mortgage1Balance: 1000, mortgage2Balance: 0
+            });
+
+            const [incomes, setIncomes] = useState([
+                { id: 1, name: '本業薪資', amount: 90000, isPassive: false },
+                { id: 2, name: '股息收益', amount: 15000, isPassive: true }
+            ]);
+            
+            const [expenses, setExpenses] = useState([
+                { id: 3, name: '房貸(一胎)', amount: 35000 },
+                { id: 32, name: '房貸(二胎)', amount: 0 },
+                { id: 31, name: '信貸', amount: 0 },
+                { id: 4, name: '變動生活支出', amount: 25000 },
+                { id: 5, name: '固定與年度攤提', amount: 15000 }
+            ]);
+
+            const [newItem, setNewItem] = useState({ type: 'income', name: '', amount: '', isPassive: false });
+            const [historyData, setHistoryData] = useState([]);
+
+            // ================= 雲端連線與讀取 =================
+            useEffect(() => {
+                const { auth, signInAnonymously, onAuthStateChanged } = window.firebaseAPI;
+                
+                // 初始化登入
+                signInAnonymously(auth).catch(err => {
+                    console.error("登入失敗", err);
+                    setCloudStatus('連線失敗，請檢查權限');
+                });
+
+                const unsubscribeAuth = onAuthStateChanged(auth, async (currentUser) => {
+                    if (currentUser) {
+                        setUser(currentUser);
+                        setCloudStatus('✅ 已連線至雲端');
+                        
+                        // 1. 讀取最新設定檔
+                        try {
+                            const { db, doc, getDoc } = window.firebaseAPI;
+                            const stateRef = doc(db, 'artifacts', appId, 'users', currentUser.uid, 'state', 'latest');
+                            const stateSnap = await getDoc(stateRef);
+                            
+                            if (stateSnap.exists()) {
+                                const data = stateSnap.data();
+                                if(data.age) setAge(data.age);
+                                if(data.assets) setAssets(data.assets);
+                                if(data.incomes) setIncomes(data.incomes);
+                                if(data.expenses) setExpenses(data.expenses);
+                                if(data.mortgage1Calc) setMortgage1Calc(data.mortgage1Calc);
+                                if(data.mortgage2Calc) setMortgage2Calc(data.mortgage2Calc);
+                                if(data.creditCalc) setCreditCalc(data.creditCalc);
+                            }
+                        } catch (err) {
+                            console.error("讀取設定檔失敗:", err);
+                        }
+                    }
+                });
+
+                return () => unsubscribeAuth();
+            }, []);
+
+            // 監聽歷史資料變更 (自動更新圖表)
+            useEffect(() => {
+                if (!user) return;
+                const { db, collection, onSnapshot } = window.firebaseAPI;
+                const historyRef = collection(db, 'artifacts', appId, 'users', user.uid, 'history');
+                
+                const unsubscribeHistory = onSnapshot(historyRef, (snapshot) => {
+                    const data = snapshot.docs.map(doc => doc.data());
+                    data.sort((a, b) => a.date.localeCompare(b.date));
+                    setHistoryData(data);
+                }, (error) => {
+                    console.error("讀取歷史資料失敗：", error);
+                });
+                
+                return () => unsubscribeHistory();
+            }, [user]);
+
+            // ================= 核心計算邏輯 =================
+            const calcPMT = (principal, years, rate) => {
+                const p = (Number(principal) || 0) * 10000;
+                const r = (Number(rate) || 0) / 100 / 12;
+                const n = (Number(years) || 0) * 12;
+                if (p <= 0 || n <= 0) return 0;
+                if (r === 0) return Math.round(p / n);
+                return Math.round(p * r * Math.pow(1 + r, n) / (Math.pow(1 + r, n) - 1));
+            };
+
+            const mortgage1Result = calcPMT(mortgage1Calc.principal, mortgage1Calc.years, mortgage1Calc.rate);
+            const mortgage2Result = calcPMT(mortgage2Calc.principal, mortgage2Calc.years, mortgage2Calc.rate);
+            const creditResult = calcPMT(creditCalc.principal, creditCalc.years, creditCalc.rate);
+
+            const totalIncome = incomes.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+            const totalExpense = expenses.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+            const netFlow = totalIncome - totalExpense;
+            
+            const totalPassiveIncome = incomes.filter(i => i.isPassive).reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+            const mainIncome = incomes.find(i => i.id === 1)?.amount || 0; 
+            const savingsRate = totalIncome > 0 ? ((netFlow / totalIncome) * 100).toFixed(1) : 0;
+            
+            const mainIncomeShortfall = totalExpense - mainIncome;
+            const mainIncomeSurvival = mainIncomeShortfall > 0 ? ((assets.cash * 10000) / mainIncomeShortfall).toFixed(1) : '∞'; 
+            
+            const unemploymentShortfall = totalExpense - totalPassiveIncome;
+            const unemploymentSurvival = unemploymentShortfall > 0 ? ((assets.cash * 10000) / unemploymentShortfall).toFixed(1) : '∞';
+
+            // 房地產淨值與總資產負債計算
+            const totalMortgage = (Number(assets.mortgage1Balance) || 0) + (Number(assets.mortgage2Balance) || 0);
+            const houseEquity = (Number(assets.houseValue) * 10000) - (totalMortgage * 10000); 
+            
+            const financialAssets = (Number(assets.cash) + Number(assets.stocksRegular) + Number(assets.stocksLeveraged) + Number(assets.funds) + Number(assets.futures));
+            const totalAssetsValue = (financialAssets + Number(assets.houseValue)) * 10000;
+            const totalLiabilities = totalMortgage * 10000;
+            const netWorth = totalAssetsValue - totalLiabilities;
+            
+            // 曝險計算 (原型+基金=1倍, 正二=2倍, 期貨=5倍, 房地產價值=1倍)
+            const equityExposure = (Number(assets.stocksRegular) + (Number(assets.stocksLeveraged) * 2) + Number(assets.funds) + (Number(assets.futures) * 5) + Number(assets.houseValue)) * 10000;
+            const exposureRatio = netWorth > 0 ? ((equityExposure / netWorth) * 100).toFixed(1) : 0;
+
+            const formatCurrency = (amount) => new Intl.NumberFormat('zh-TW', { style: 'currency', currency: 'TWD', minimumFractionDigits: 0 }).format(Number(amount) || 0);
+
+            // ================= 互動處理與儲存雲端 =================
+            const applyToExpenses = (id, amount) => setExpenses(expenses.map(item => item.id === id ? { ...item, amount } : item));
+            
+            const handleAssetChange = (field, value) => setAssets({ ...assets, [field]: value === '' ? '' : Number(value) });
+            const handleSliderChange = (id, type, amount) => {
+                const numAmount = amount === '' ? '' : Number(amount);
+                if (type === 'income') setIncomes(incomes.map(item => item.id === id ? { ...item, amount: numAmount } : item));
+                else setExpenses(expenses.map(item => item.id === id ? { ...item, amount: numAmount } : item));
+            };
+
+            const handleAddItem = (e) => {
+                e.preventDefault();
+                if (!newItem.name || !newItem.amount) return;
+                const itemData = { id: Date.now(), name: newItem.name, amount: Number(newItem.amount), isPassive: newItem.type === 'income' ? newItem.isPassive : false };
+                if (newItem.type === 'income') setIncomes([...incomes, itemData]);
+                else setExpenses([...expenses, itemData]);
+                setNewItem({ type: 'income', name: '', amount: '', isPassive: false });
+            };
+            const handleDelete = (id, type) => {
+                if (type === 'income') setIncomes(incomes.filter(i => i.id !== id));
+                else setExpenses(expenses.filter(e => e.id !== id));
+            };
+            
+            // 🔥 同步所有資料與歷史到 Firebase 🔥
+            const handleSaveToCloud = async () => {
+                if (!user) {
+                    alert("⚠️ 雲端資料庫尚未準備好，請稍後再試！");
+                    return;
+                }
+                
+                try {
+                    const { db, doc, setDoc } = window.firebaseAPI;
+                    
+                    // 1. 儲存最新設定 (方便下次開啟時載入)
+                    const stateRef = doc(db, 'artifacts', appId, 'users', user.uid, 'state', 'latest');
+                    await setDoc(stateRef, {
+                        age, assets, incomes, expenses,
+                        mortgage1Calc, mortgage2Calc, creditCalc,
+                        lastUpdated: new Date().toISOString()
+                    });
+
+                    // 2. 寫入歷史快照 (畫圖用)
+                    const today = new Date();
+                    const yearMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+                    const historyRef = doc(db, 'artifacts', appId, 'users', user.uid, 'history', yearMonth);
+                    await setDoc(historyRef, {
+                        date: yearMonth,
+                        netWorth,
+                        totalAssets: totalAssetsValue,
+                        exposureRatio: Number(exposureRatio)
+                    });
+
+                    alert(`✅ 已成功將設定與 ${yearMonth} 的歷史點位同步至雲端！\n下次開啟網頁會自動幫您載入最新進度。`);
+                } catch (error) {
+                    console.error("雲端儲存失敗:", error);
+                    alert("❌ 儲存失敗！如果問題持續發生，請確認您的 Firebase 規則是否有開放讀寫權限。");
+                }
+            };
+
+            const defaultIds = [1, 2, 3, 31, 32, 4, 5];
+
+            return (
+                <div className="min-h-screen p-4 md:p-8">
+                    <div className="max-w-7xl mx-auto space-y-6">
+                        
+                        {/* Header */}
+                        <header className="mb-6 flex flex-col md:flex-row md:items-end justify-between gap-4 border-b border-slate-200 pb-4">
+                            <div>
+                                <h1 className="text-3xl font-bold text-slate-900 tracking-tight">個人財務管理 (雲端版)</h1>
+                                <p className="text-slate-500 mt-1 text-sm flex items-center gap-2">
+                                    <span className="inline-block w-2 h-2 rounded-full bg-emerald-500"></span>
+                                    {cloudStatus} (ID: {user ? user.uid.substring(0,5) : '...'})
+                                </p>
+                            </div>
+                            <div className="flex gap-2">
+                                <button onClick={handleSaveToCloud} className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 px-5 rounded-lg shadow-sm flex items-center gap-2 transition-colors">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+                                    儲存當前設定與本月快照
+                                </button>
+                            </div>
+                        </header>
+
+                        {/* 摘要數據卡片 */}
+                        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
+                            <SummaryCard title="總收入" amount={totalIncome} color="text-blue-600" format={formatCurrency} />
+                            <SummaryCard title="總支出" amount={totalExpense} color="text-red-500" format={formatCurrency} />
+                            <SummaryCard title="淨現金流 (結餘)" amount={netFlow} color={netFlow >= 0 ? 'text-emerald-500' : 'text-rose-600'} format={formatCurrency} isNet />
+                            <div className="bg-white rounded-2xl p-5 shadow-sm border border-slate-100 flex flex-col justify-center">
+                                <h3 className="text-sm font-medium text-slate-500 mb-1">儲蓄率</h3>
+                                <div className={`text-3xl font-bold tracking-tight ${netFlow >= 0 ? 'text-emerald-500' : 'text-rose-600'}`}>{netFlow >= 0 ? `${savingsRate}%` : '透支'}</div>
+                            </div>
+                            <div className="bg-white rounded-2xl p-5 shadow-sm border border-slate-100 flex flex-col justify-center">
+                                <h3 className="text-xs font-medium text-slate-500 mb-1">僅本業維持 (無被動)</h3>
+                                <div className="text-2xl font-bold tracking-tight text-indigo-500 truncate">{mainIncomeSurvival} <span className="text-sm text-slate-500">月</span></div>
+                            </div>
+                            <div className="bg-white rounded-2xl p-5 shadow-sm border border-slate-100 flex flex-col justify-center relative overflow-hidden">
+                                <h3 className="text-xs font-medium text-slate-500 mb-1 relative z-10">失業可維持 (有被動)</h3>
+                                <div className="text-2xl font-bold tracking-tight text-blue-600 truncate relative z-10">{unemploymentSurvival} <span className="text-sm text-slate-500">月</span></div>
+                            </div>
+                        </div>
+
+                        {/* 雙欄主區塊 */}
+                        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 mt-6">
+                            
+                            {/* 左側操作區 */}
+                            <div className="lg:col-span-4 space-y-6">
+
+                                {/* 第一部分：綜合資產與負債盤點 */}
+                                <div className="bg-white rounded-2xl p-5 shadow-sm border-t-4 border-indigo-500">
+                                    <div className="flex justify-between items-center mb-4">
+                                        <h2 className="text-lg font-semibold text-slate-800">綜合資產與負債盤點</h2>
+                                        <div className="flex items-center space-x-2">
+                                            <label className="text-xs text-slate-500">年齡</label>
+                                            <input type="number" min="18" max="100" value={age} onChange={e => setAge(Number(e.target.value))} className="w-16 px-2 py-1 text-sm bg-slate-50 border border-slate-200 rounded" />
+                                        </div>
+                                    </div>
+                                    
+                                    <h3 className="text-xs font-bold text-slate-500 mb-2 border-b pb-1">金融資產 (萬)</h3>
+                                    <div className="grid grid-cols-2 gap-3 mb-4">
+                                        <InputGroup label="現金預備金" value={assets.cash} onChange={e => handleAssetChange('cash', e.target.value)} color="blue" />
+                                        <InputGroup label="原型股票 (1倍)" value={assets.stocksRegular} onChange={e => handleAssetChange('stocksRegular', e.target.value)} color="indigo" />
+                                        <InputGroup label="正二ETF (2倍)" value={assets.stocksLeveraged} onChange={e => handleAssetChange('stocksLeveraged', e.target.value)} color="purple" />
+                                        <InputGroup label="基金部位 (1倍)" value={assets.funds} onChange={e => handleAssetChange('funds', e.target.value)} color="indigo" />
+                                        <InputGroup label="期貨保證金 (5倍)" value={assets.futures} onChange={e => handleAssetChange('futures', e.target.value)} color="orange" />
+                                    </div>
+
+                                    <h3 className="text-xs font-bold text-emerald-600 mb-2 border-b border-emerald-100 pb-1">房產與房貸負債 (萬)</h3>
+                                    <div className="grid grid-cols-2 gap-3 mb-4">
+                                        <InputGroup label="房產估值 (1倍)" value={assets.houseValue} onChange={e => handleAssetChange('houseValue', e.target.value)} color="emerald" />
+                                        <div className="col-span-1"></div>
+                                        <InputGroup label="一胎房貸餘額" value={assets.mortgage1Balance} onChange={e => handleAssetChange('mortgage1Balance', e.target.value)} color="red" />
+                                        <InputGroup label="二胎房貸餘額" value={assets.mortgage2Balance} onChange={e => handleAssetChange('mortgage2Balance', e.target.value)} color="red" />
+                                    </div>
+
+                                    <div className="p-3 bg-slate-50 rounded-xl space-y-2 text-sm border border-slate-200">
+                                        <div className="flex justify-between text-slate-600">
+                                            <span>房產淨值 (估值-貸款)：</span>
+                                            <span className="font-semibold text-emerald-700">{formatCurrency(houseEquity)}</span>
+                                        </div>
+                                        <div className="flex justify-between border-t border-slate-200 pt-2 text-slate-600">
+                                            <span>總資產 (金融+房產)：</span>
+                                            <span className="font-semibold text-slate-700">{formatCurrency(totalAssetsValue)}</span>
+                                        </div>
+                                        <div className="flex justify-between text-slate-600">
+                                            <span>總負債 (總房貸)：</span>
+                                            <span className="font-semibold text-red-500">{formatCurrency(totalLiabilities)}</span>
+                                        </div>
+                                        <div className="flex justify-between border-t border-slate-200 pt-2">
+                                            <span className="font-bold text-slate-700">總淨資產：</span>
+                                            <span className="font-bold text-emerald-600">{formatCurrency(netWorth)}</span>
+                                        </div>
+                                    </div>
+
+                                    <div className="mt-4 p-4 bg-indigo-50 rounded-xl border border-indigo-100">
+                                        <div className="flex justify-between items-end mb-1">
+                                            <span className="text-sm font-bold text-indigo-900">總投資曝險倍率</span>
+                                            <span className="text-2xl font-black text-indigo-600">{exposureRatio}%</span>
+                                        </div>
+                                        <p className="text-[10px] text-indigo-700 leading-relaxed">包含：原型股票+(正二×2)+基金+(期貨×5)+房產估值</p>
+                                    </div>
+                                </div>
+
+                                {/* 第二部分：債務每月還款試算 */}
+                                <div className="bg-white rounded-2xl p-5 shadow-sm border-t-4 border-red-400">
+                                    <h2 className="text-lg font-semibold text-slate-800 mb-4">債務每月還款試算</h2>
+                                    <div className="space-y-4">
+                                        <div className="p-3 bg-red-50/50 rounded-xl border border-red-100">
+                                            <h3 className="text-xs font-bold text-slate-700 mb-2 flex justify-between">
+                                                <span>🏠 房貸 (一胎)</span><span className="text-red-500">月繳 {formatCurrency(mortgage1Result)}</span>
+                                            </h3>
+                                            <div className="grid grid-cols-3 gap-2 mb-2">
+                                                <InputSmall label="本金(萬)" value={mortgage1Calc.principal} onChange={e => setMortgage1Calc({...mortgage1Calc, principal: e.target.value})} />
+                                                <InputSmall label="年限" value={mortgage1Calc.years} onChange={e => setMortgage1Calc({...mortgage1Calc, years: e.target.value})} />
+                                                <InputSmall label="利率(%)" value={mortgage1Calc.rate} onChange={e => setMortgage1Calc({...mortgage1Calc, rate: e.target.value})} />
+                                            </div>
+                                            <button onClick={() => applyToExpenses(3, mortgage1Result)} className="w-full text-xs bg-white border border-red-200 hover:bg-red-50 text-red-600 font-medium py-1.5 rounded transition-colors shadow-sm">
+                                                一鍵帶入「房貸(一胎)」現金流支出
+                                            </button>
+                                        </div>
+                                        <div className="p-3 bg-red-50/50 rounded-xl border border-red-100">
+                                            <h3 className="text-xs font-bold text-slate-700 mb-2 flex justify-between">
+                                                <span>🏠 房貸 (二胎)</span><span className="text-red-500">月繳 {formatCurrency(mortgage2Result)}</span>
+                                            </h3>
+                                            <div className="grid grid-cols-3 gap-2 mb-2">
+                                                <InputSmall label="本金(萬)" value={mortgage2Calc.principal} onChange={e => setMortgage2Calc({...mortgage2Calc, principal: e.target.value})} />
+                                                <InputSmall label="年限" value={mortgage2Calc.years} onChange={e => setMortgage2Calc({...mortgage2Calc, years: e.target.value})} />
+                                                <InputSmall label="利率(%)" value={mortgage2Calc.rate} onChange={e => setMortgage2Calc({...mortgage2Calc, rate: e.target.value})} />
+                                            </div>
+                                            <button onClick={() => applyToExpenses(32, mortgage2Result)} className="w-full text-xs bg-white border border-red-200 hover:bg-red-50 text-red-600 font-medium py-1.5 rounded transition-colors shadow-sm">
+                                                一鍵帶入「房貸(二胎)」現金流支出
+                                            </button>
+                                        </div>
+                                        <div className="p-3 bg-orange-50/50 rounded-xl border border-orange-100">
+                                            <h3 className="text-xs font-bold text-slate-700 mb-2 flex justify-between">
+                                                <span>💳 個人信貸</span><span className="text-orange-600">月繳 {formatCurrency(creditResult)}</span>
+                                            </h3>
+                                            <div className="grid grid-cols-3 gap-2 mb-2">
+                                                <InputSmall label="本金(萬)" value={creditCalc.principal} onChange={e => setCreditCalc({...creditCalc, principal: e.target.value})} />
+                                                <InputSmall label="年限" value={creditCalc.years} onChange={e => setCreditCalc({...creditCalc, years: e.target.value})} />
+                                                <InputSmall label="利率(%)" value={creditCalc.rate} onChange={e => setCreditCalc({...creditCalc, rate: e.target.value})} />
+                                            </div>
+                                            <button onClick={() => applyToExpenses(31, creditResult)} className="w-full text-xs bg-white border border-orange-200 hover:bg-orange-50 text-orange-600 font-medium py-1.5 rounded transition-colors shadow-sm">
+                                                一鍵帶入「信貸」現金流支出
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* 第三部分：現金流管理 */}
+                                <div className="bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
+                                    <h2 className="text-lg font-semibold mb-4 text-slate-800">每月收支明細</h2>
+                                    <div className="space-y-4">
+                                        <div>
+                                            <h3 className="text-sm font-bold text-slate-500 mb-2 flex items-center justify-between">收入</h3>
+                                            {incomes.map(item => (
+                                                <div key={item.id} className="mb-4">
+                                                    <div className="flex justify-between items-center text-sm mb-2">
+                                                        <div className="flex items-center space-x-2">
+                                                            <label className="font-medium text-slate-700">{item.name}</label>
+                                                            {item.isPassive && <span className="text-[10px] font-semibold text-blue-600 bg-blue-100 px-1.5 py-0.5 rounded-full">被動</span>}
+                                                        </div>
+                                                        <div className="flex items-center space-x-2">
+                                                            <div className="relative">
+                                                                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs">$</span>
+                                                                <input type="number" min="0" value={item.amount} onChange={(e) => handleSliderChange(item.id, 'income', e.target.value)}
+                                                                    className="w-24 pl-5 pr-2 py-1 text-right text-sm font-semibold text-blue-600 bg-slate-50 border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-blue-500" />
+                                                            </div>
+                                                            {!defaultIds.includes(item.id) && <button onClick={() => handleDelete(item.id, 'income')} className="text-slate-400 hover:text-red-500 px-1 text-lg">×</button>}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                        <div className="pt-3 border-t border-slate-100">
+                                            <h3 className="text-sm font-bold text-slate-500 mb-2">支出</h3>
+                                            {expenses.map(item => (
+                                                <div key={item.id} className="mb-4">
+                                                    <div className="flex justify-between items-center text-sm mb-2">
+                                                        <label className="font-medium text-slate-700">{item.name}</label>
+                                                        <div className="flex items-center space-x-2">
+                                                            <div className="relative">
+                                                                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs">$</span>
+                                                                <input type="number" min="0" value={item.amount} onChange={(e) => handleSliderChange(item.id, 'expense', e.target.value)}
+                                                                    className="w-24 pl-5 pr-2 py-1 text-right text-sm font-semibold text-red-500 bg-slate-50 border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-red-500" />
+                                                            </div>
+                                                            {!defaultIds.includes(item.id) && <button onClick={() => handleDelete(item.id, 'expense')} className="text-slate-400 hover:text-red-500 px-1 text-lg">×</button>}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    <div className="mt-4 pt-4 border-t border-slate-200">
+                                        <form onSubmit={handleAddItem} className="flex gap-2">
+                                            <select value={newItem.type} onChange={e => setNewItem({...newItem, type: e.target.value})} className="px-2 py-1 text-sm border rounded">
+                                                <option value="income">收入</option>
+                                                <option value="expense">支出</option>
+                                            </select>
+                                            <input type="text" required value={newItem.name} onChange={e => setNewItem({...newItem, name: e.target.value})} placeholder="名稱" className="w-24 px-2 py-1 text-sm border rounded" />
+                                            <input type="number" required min="1" value={newItem.amount} onChange={e => setNewItem({...newItem, amount: e.target.value})} placeholder="金額" className="w-20 px-2 py-1 text-sm border rounded" />
+                                            <button type="submit" className="bg-slate-800 text-white px-3 py-1 rounded text-sm">+</button>
+                                        </form>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* 右側圖表區塊 */}
+                            <div className="lg:col-span-8 flex flex-col gap-6">
+                                <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 flex flex-col">
+                                    <h2 className="text-lg font-semibold mb-4 text-slate-800 flex justify-between items-center">
+                                        長期資產成長與曝險趨勢
+                                        <span className="text-xs font-normal text-slate-500 bg-slate-100 px-3 py-1 rounded-full">雲端自動連線同步中 ☁️</span>
+                                    </h2>
+                                    <div className="h-[400px] w-full">
+                                        {historyData.length > 0 ? (
+                                            <ResponsiveContainer width="100%" height="100%">
+                                                <LineChart data={historyData} margin={{ top: 10, right: 10, bottom: 5, left: 10 }}>
+                                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                                                    <XAxis dataKey="date" tick={{fontSize: 12, fill: '#64748b'}} tickLine={false} axisLine={false} />
+                                                    
+                                                    <YAxis yAxisId="left" tickFormatter={(value) => `$${(value / 10000).toFixed(0)}萬`} tick={{fontSize: 12, fill: '#64748b'}} tickLine={false} axisLine={false} width={80} />
+                                                    <YAxis yAxisId="right" orientation="right" tickFormatter={(value) => `${value}%`} tick={{fontSize: 12, fill: '#64748b'}} tickLine={false} axisLine={false} width={50} />
+                                                    
+                                                    <Tooltip 
+                                                        formatter={(value, name) => {
+                                                            if (name === 'exposureRatio') return [`${value}%`, '曝險倍率'];
+                                                            return [formatCurrency(value), name === 'netWorth' ? '總淨資產' : '總資產'];
+                                                        }}
+                                                        contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                                                    />
+                                                    <Legend wrapperStyle={{ paddingTop: '20px' }} />
+                                                    <Line yAxisId="left" type="monotone" dataKey="totalAssets" name="總資產" stroke="#94a3b8" strokeWidth={2} dot={{ r: 4 }} />
+                                                    <Line yAxisId="left" type="monotone" dataKey="netWorth" name="總淨資產" stroke="#10b981" strokeWidth={3} dot={{ r: 4, strokeWidth: 2 }} activeDot={{ r: 6 }} />
+                                                    <Line yAxisId="right" type="monotone" dataKey="exposureRatio" name="曝險倍率 (%)" stroke="#f59e0b" strokeWidth={2} dot={{ r: 4 }} strokeDasharray="5 5" />
+                                                </LineChart>
+                                            </ResponsiveContainer>
+                                        ) : (
+                                            <div className="w-full h-full flex flex-col items-center justify-center border-2 border-dashed border-slate-200 rounded-xl text-slate-400 bg-slate-50">
+                                                <p className="mb-2">目前雲端尚無歷史紀錄。</p>
+                                                <p className="text-sm">請調整好左側的資產與負債狀態後，點擊上方「儲存當前設定與本月快照」按鈕建立第一筆資料！</p>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // 等待 Firebase 模組載入完畢後，再啟動 React 渲染
+        window.addEventListener('firebaseLoaded', () => {
+            const root = ReactDOM.createRoot(document.getElementById('root'));
+            root.render(<CashflowApp />);
+        });
+    </script>
+</body>
 </html>
